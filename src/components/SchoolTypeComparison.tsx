@@ -1,0 +1,135 @@
+import { useEffect, useRef } from 'react';
+import * as echarts from 'echarts/core';
+import { BarChart } from 'echarts/charts';
+import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
+import type { DashboardData } from '../types';
+import FlipCard from './FlipCard';
+import InsightBack from './InsightBack';
+import { getSchoolTypeComparisonInsight } from './ChartInsights';
+import { useOverviewInView } from '../hooks/useOverviewInView';
+import { mountEcharts } from '../utils/chartResize';
+import { buildSideLegend, buildSideLegendGrid, sideLegendRadarCenter, sideLegendRadarRadius } from '../utils/chartLegend';
+
+echarts.use([BarChart, GridComponent, TooltipComponent, LegendComponent, CanvasRenderer]);
+
+export default function SchoolTypeComparison({ data }: { data: DashboardData }) {
+  const { ref: scrollRef, inView } = useOverviewInView();
+  const chartRef = useRef<HTMLDivElement>(null);
+  const hasRendered = useRef(false);
+  const insight = getSchoolTypeComparisonInsight(data);
+
+  useEffect(() => {
+    if (!inView || hasRendered.current || !chartRef.current) return;
+    hasRendered.current = true;
+        const categoryMap: Record<string, string> = {
+      'A类-学校管理与安全': 'A. 学校管理与安全\n(11分)',
+      'B类-办学硬件与环境': 'B. 办学硬件与环境\n(20分)',
+      'C类-师资队伍与发展': 'C. 师资队伍与发展\n(13分)',
+    };
+
+    const categories = Object.keys(categoryMap);
+    const schoolTypes = ['小学', '初中', '九年制'];
+
+    const seriesData = schoolTypes.map((st, si) => {
+      const colors = ['#f97316', '#06b6d4', '#10b981'];
+      const colorsLight = ['#fb923c', '#22d3ee', '#34d399'];
+      const values = categories.map(cat => {
+        const rate = data.category_summary[cat]?.[st] ?? 0;
+        return +(rate * 100).toFixed(1);
+      });
+      return {
+        name: st,
+        type: 'bar' as const,
+        data: values,
+        itemStyle: {
+          borderRadius: [6, 6, 0, 0],
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: colors[si] },
+            { offset: 1, color: colorsLight[si] + '44' },
+          ]),
+        },
+        emphasis: {
+          itemStyle: { color: colors[si] },
+        },
+        barGap: '30%',
+        label: {
+          show: true,
+          position: 'top',
+          color: '#e8eaed',
+          fontSize: 11,
+          fontWeight: 'bold',
+          formatter: '{c}%',
+        },
+      };
+    });
+
+    const option: echarts.EChartsCoreOption = {
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'axis',
+        axisPointer: { type: 'shadow' },
+        backgroundColor: 'rgba(22,27,46,0.95)',
+        borderColor: 'rgba(255,255,255,0.1)',
+        textStyle: { color: '#e8eaed', fontSize: 12 },
+        formatter: (params: unknown) => {
+          const p = params as { seriesName: string; value: number; axisValue: string }[];
+          if (!p?.length) return '';
+          return `<b>${p[0].axisValue.replace('\n', ' ')}</b><br/>` +
+            p.map(item =>
+              `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.seriesName === '小学' ? '#4da8ff' : item.seriesName === '初中' ? '#00d4ff' : '#a855f7'};margin-right:4px;"></span>${item.seriesName}: <b>${item.value}%</b>`
+            ).join('<br/>');
+        },
+      },
+      legend: buildSideLegend(schoolTypes, { fontSize: 11 }),
+      grid: buildSideLegendGrid({ top: "6%" }),
+      xAxis: {
+        type: 'category',
+        data: Object.values(categoryMap),
+        axisLabel: { color: '#9aa0b0', fontSize: 11 },
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: 'rgba(255,255,255,0.1)' } },
+      },
+      yAxis: {
+        type: 'value',
+        name: '得分率 (%)',
+        max: 100,
+        nameTextStyle: { color: '#9aa0b0', fontSize: 10 },
+        axisLabel: { color: '#9aa0b0', fontSize: 10, formatter: '{value}%' },
+        splitLine: { lineStyle: { color: 'rgba(255,255,255,0.04)' } },
+      },
+      series: seriesData,
+    };
+
+    const chart = mountEcharts(chartRef.current, option);
+
+    const handleResize = () => chart.resize();
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.dispose();
+    };
+  }, [inView, data]);
+
+  return (
+    <FlipCard
+      front={
+        <div ref={scrollRef} className="card-border glow-blue p-4 relative overview-chart-card">
+          <span className="flip-hint" title="点击空白处翻转查看结论">⇄</span>
+          <h3 className="text-sm font-semibold text-text-primary mb-3 flex items-center gap-2">
+            <span className="text-accent-blue">🏫</span>
+            学校类型 × 三大维度综合对比
+          </h3>
+          <div className="overview-chart-body">
+            <div ref={chartRef} className="overview-chart-canvas" />
+          </div>
+          <p className="text-xs text-text-muted text-center mt-1 overview-chart-footer">
+            九年制学校综合表现最优（均分 {data.by_school_type['九年制']?.avg_score}），小学在硬件与环境维度短板最突出
+          </p>
+        </div>
+      }
+      back={<InsightBack insight={insight} />}
+    />
+  );
+}
